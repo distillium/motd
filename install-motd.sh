@@ -47,6 +47,55 @@ log_error() {
     echo "[!] Error: $*" >&2
 }
 
+detect_system_version() {
+    SYSTEM_TYPE=""
+    SYSTEM_VERSION=""
+    
+    if [[ -f "/etc/debian_version" ]]; then
+        if [[ -f "/etc/os-release" ]]; then
+            local os_id
+            os_id=$(safe_cmd "${GREP}" "^ID=" /etc/os-release | "${CUT}" -d= -f2 | tr -d '"')
+            
+            case "${os_id}" in
+                "ubuntu")
+                    SYSTEM_TYPE="ubuntu"
+                    SYSTEM_VERSION=$(safe_cmd "${GREP}" "^VERSION_ID=" /etc/os-release | "${CUT}" -d= -f2 | tr -d '"')
+                    ;;
+                "debian")
+                    SYSTEM_TYPE="debian"
+                    SYSTEM_VERSION=$(safe_cmd "${CAT}" /etc/debian_version | "${CUT}" -d. -f1)
+                    ;;
+                *)
+                    if "${GREP}" -qi "ubuntu" /etc/os-release; then
+                        SYSTEM_TYPE="ubuntu"
+                        SYSTEM_VERSION=$(safe_cmd "${GREP}" "^VERSION_ID=" /etc/os-release | "${CUT}" -d= -f2 | tr -d '"')
+                    else
+                        SYSTEM_TYPE="debian"
+                        SYSTEM_VERSION=$(safe_cmd "${CAT}" /etc/debian_version | "${CUT}" -d. -f1)
+                    fi
+                    ;;
+            esac
+        else
+            SYSTEM_TYPE="debian"
+            SYSTEM_VERSION=$(safe_cmd "${CAT}" /etc/debian_version | "${CUT}" -d. -f1)
+        fi
+    else
+        log_error "Неподдерживаемая система - требуется Debian/Ubuntu"
+        exit 1
+    fi
+    
+    log_info "Обнаружена система: ${SYSTEM_TYPE} ${SYSTEM_VERSION}"
+}
+
+safe_cmd() {
+    local cmd_output
+    if cmd_output=$("$@" 2>/dev/null); then
+        printf '%s' "${cmd_output}"
+    else
+        printf 'N/A'
+    fi
+}
+
 check_backup_exists() {
     [[ -f "${INSTALL_MARKER}" ]] && [[ -d "${BACKUP_ROOT}" ]]
 }
@@ -181,7 +230,19 @@ complete_cleanup() {
 }
 
 force_regenerate_standard_motd() {
-    log_info "Принудительная регенерация стандартного MOTD..."
+    log_info "Принудительная регенерация стандартного MOTD для ${SYSTEM_TYPE} ${SYSTEM_VERSION}..."
+    
+    local cache_files=(
+        "/var/run/motd"
+        "/var/run/motd.dynamic"
+        "/run/motd"
+        "/run/motd.dynamic"
+        "/var/lib/update-notifier/updates-available"
+    )
+    
+    for cache_file in "${cache_files[@]}"; do
+        "${RM}" -f "${cache_file}" 2>/dev/null || true
+    done
     
     if command -v apt >/dev/null 2>&1; then
         apt list --upgradable > /dev/null 2>&1 || true
@@ -192,6 +253,32 @@ force_regenerate_standard_motd() {
     fi
     
     if [[ -d "/etc/update-motd.d" ]]; then
+        case "${SYSTEM_TYPE}" in
+            "ubuntu")
+                local ubuntu_major ubuntu_minor
+                ubuntu_major=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f1)
+                ubuntu_minor=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f2)
+                local ubuntu_numeric=$((ubuntu_major * 100 + ubuntu_minor))
+                
+                if [[ "${ubuntu_numeric}" -ge 2404 ]]; then
+                    "${CHMOD}" 755 /etc/update-motd.d/* 2>/dev/null || true
+                    "${CHMOD}" 644 /etc/update-motd.d/00-header 2>/dev/null || true
+                    "${CHMOD}" 644 /etc/update-motd.d/10-help-text 2>/dev/null || true
+                else
+                    "${CHMOD}" +x /etc/update-motd.d/* 2>/dev/null || true
+                fi
+                ;;
+            "debian")
+                if [[ "${SYSTEM_VERSION}" =~ ^[0-9]+$ ]] && [[ "${SYSTEM_VERSION}" -ge 13 ]]; then
+                    "${CHMOD}" 755 /etc/update-motd.d/* 2>/dev/null || true
+                else
+                    "${CHMOD}" +x /etc/update-motd.d/* 2>/dev/null || true
+                fi
+                ;;
+        esac
+        
+        "${CHMOD}" -x /etc/update-motd.d/00-dist-motd 2>/dev/null || true
+        
         if command -v run-parts >/dev/null 2>&1; then
             local temp_motd=$(mktemp)
             run-parts --lsbsysinit /etc/update-motd.d/ > "${temp_motd}" 2>/dev/null || true
@@ -205,6 +292,21 @@ force_regenerate_standard_motd() {
             "${RM}" -f "${temp_motd}"
         fi
     fi
+    
+    case "${SYSTEM_TYPE}" in
+        "ubuntu")
+            local ubuntu_major ubuntu_minor
+            ubuntu_major=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f1)
+            ubuntu_minor=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f2)
+            local ubuntu_numeric=$((ubuntu_major * 100 + ubuntu_minor))
+            
+            if [[ "${ubuntu_numeric}" -ge 2404 ]]; then
+                if [[ -f "/etc/motd" ]]; then
+                    "${CHMOD}" 644 "/etc/motd" 2>/dev/null || true
+                fi
+            fi
+            ;;
+    esac
     
     if "${SYSTEMCTL}" list-unit-files | grep -q "motd-news"; then
         "${SYSTEMCTL}" restart motd-news.timer 2>/dev/null || true
@@ -275,10 +377,31 @@ check_existing_installation() {
 }
 
 validate_system() {
-    if [[ ! -f "/etc/debian_version" ]]; then
-        log_error "Скрипт предназначен только для систем Debian/Ubuntu"
-        exit 1
-    fi
+    detect_system_version
+    
+    case "${SYSTEM_TYPE}" in
+        "debian")
+            if [[ "${SYSTEM_VERSION}" =~ ^[0-9]+$ ]] && [[ "${SYSTEM_VERSION}" -lt 11 ]]; then
+                log_error "Требуется Debian 11 или новее. Обнаружен: Debian ${SYSTEM_VERSION}"
+                exit 1
+            fi
+            ;;
+        "ubuntu")
+            local ubuntu_major ubuntu_minor
+            ubuntu_major=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f1)
+            ubuntu_minor=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f2)
+            local ubuntu_numeric=$((ubuntu_major * 100 + ubuntu_minor))
+            
+            if [[ "${ubuntu_numeric}" -lt 2204 ]]; then
+                log_error "Требуется Ubuntu 22.04 или новее. Обнаружен: Ubuntu ${SYSTEM_VERSION}"
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Неподдерживаемая система. Поддерживаются только Debian 11+ и Ubuntu 22.04+"
+            exit 1
+            ;;
+    esac
     
     local required_commands=("${APT_GET}" "${SED}" "${GREP}" "${CHMOD}" "${TAR}")
     for cmd in "${required_commands[@]}"; do
@@ -287,10 +410,12 @@ validate_system() {
             exit 1
         fi
     done
+    
+    log_info "Система совместима: ${SYSTEM_TYPE} ${SYSTEM_VERSION}"
 }
 
 install_dependencies() {
-    log_info "Установка зависимостей..."
+    log_info "Установка зависимостей для ${SYSTEM_TYPE} ${SYSTEM_VERSION}..."
     
     if [[ ! -f "${APT_CONF_FILE}" ]]; then
         echo 'Acquire::ForceIPv4 "true";' > "${APT_CONF_FILE}"
@@ -302,10 +427,33 @@ install_dependencies() {
     fi
     
     local packages=("toilet" "figlet" "procps" "lsb-release" "whiptail" "rsync")
+    
+    case "${SYSTEM_TYPE}" in
+        "debian")
+            if [[ "${SYSTEM_VERSION}" =~ ^[0-9]+$ ]] && [[ "${SYSTEM_VERSION}" -ge 13 ]]; then
+                log_info "Добавляем пакеты для Debian 13+..."
+                packages+=("sqlite3")
+            fi
+            ;;
+        "ubuntu")
+            local ubuntu_major ubuntu_minor
+            ubuntu_major=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f1)
+            ubuntu_minor=$(echo "${SYSTEM_VERSION}" | "${CUT}" -d. -f2)
+            local ubuntu_numeric=$((ubuntu_major * 100 + ubuntu_minor))
+            
+            if [[ "${ubuntu_numeric}" -ge 2404 ]]; then
+                log_info "Добавляем пакеты для Ubuntu 24.04+..."
+                packages+=("sqlite3")
+            fi
+            ;;
+    esac
+    
     if ! "${APT_GET}" install -y "${packages[@]}" > /dev/null; then
         log_error "Не удалось установить необходимые пакеты"
         exit 1
     fi
+    
+    log_info "Зависимости установлены успешно"
 }
 
 create_config() {
@@ -437,17 +585,41 @@ show_session_info() {
     fi
     printf "${COLOR_LABEL}%-22s${COLOR_YELLOW}%s${RESET}\n" "User:" "${real_user:-Unknown}"
     
-    if [[ -f "/var/log/lastlog" ]] && [[ -x "${LASTLOG}" ]]; then
+    local lastlog_displayed=false
+    
+    if command -v lastlog2 >/dev/null 2>&1; then
+        local lastlog2_output
+        lastlog2_output=$(safe_cmd lastlog2 show -u "${real_user}" 2>/dev/null | "${TAIL}" -n 1)
+        if [[ "${lastlog2_output}" != "N/A" ]] && [[ "${lastlog2_output}" != *"Never logged in"* ]] && [[ -n "${lastlog2_output}" ]]; then
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s${RESET}\n" "Last login:" "${lastlog2_output}"
+            lastlog_displayed=true
+        fi
+    fi
+    
+    if [[ "${lastlog_displayed}" = false ]] && [[ -f "/var/lib/wtmpdb/wtmp.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+        local wtmp_query
+        wtmp_query=$(safe_cmd sqlite3 /var/lib/wtmpdb/wtmp.db "SELECT strftime('%Y-%m-%d %H:%M:%S', time, 'unixepoch'), host FROM wtmp WHERE user='${real_user}' AND type=7 ORDER BY time DESC LIMIT 1;" 2>/dev/null)
+        if [[ "${wtmp_query}" != "N/A" ]] && [[ -n "${wtmp_query}" ]]; then
+            local wtmp_time wtmp_host
+            wtmp_time=$(echo "${wtmp_query}" | "${CUT}" -d'|' -f1)
+            wtmp_host=$(echo "${wtmp_query}" | "${CUT}" -d'|' -f2)
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" "Last login:" "${wtmp_time}" "${wtmp_host:-unknown}"
+            lastlog_displayed=true
+        fi
+    fi
+    
+    if [[ "${lastlog_displayed}" = false ]] && [[ -f "/var/log/lastlog" ]] && [[ -x "${LASTLOG}" ]]; then
         local lastlog_raw lastlog_date lastlog_ip
         lastlog_raw=$(safe_cmd "${LASTLOG}" -u "${real_user}" | "${TAIL}" -n 1)
         if [[ "${lastlog_raw}" != "N/A" ]] && [[ "${lastlog_raw}" != *"Never logged in"* ]]; then
             lastlog_date=$(echo "${lastlog_raw}" | "${AWK}" '{printf "%s %s %s %s %s", $4, $5, $6, $7, $9}')
             lastlog_ip=$(echo "${lastlog_raw}" | "${AWK}" '{print $3}')
             printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" "Last login:" "${lastlog_date}" "${lastlog_ip}"
-        else
-            echo -e "${COLOR_LABEL}Last login:${RESET} not available"
+            lastlog_displayed=true
         fi
-    else
+    fi
+    
+    if [[ "${lastlog_displayed}" = false ]]; then
         echo -e "${COLOR_LABEL}Last login:${RESET} not available"
     fi
     
@@ -1140,6 +1312,7 @@ main() {
     log_info "Начинается установка кастомного MOTD с полным бэкапом директорий..."
     
     check_root
+    detect_system_version
     check_existing_installation
     validate_system
     
