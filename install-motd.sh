@@ -420,6 +420,21 @@ validate_system() {
     log_info "Система совместима: ${SYSTEM_TYPE} ${SYSTEM_VERSION}"
 }
 
+install_modern_login_tools() {
+    if {
+        [[ "$SYSTEM_TYPE" == "debian" && "${SYSTEM_VERSION%%.*}" -ge 13 ]] ||
+        [[ "$SYSTEM_TYPE" == "ubuntu" && $(( ${SYSTEM_VERSION%%.*} * 100 + ${SYSTEM_VERSION#*.} )) -ge 2404 ]]
+    }; then
+        log_info "Обнаружена новая версия ОС — устанавливаем lastlog2, wtmpdb, sqlite3..."
+        if ! "${APT_GET}" update -qq; then
+            log_warn "Не удалось обновить список пакетов"
+        fi
+        DEBIAN_FRONTEND=noninteractive "${APT_GET}" install -y --no-install-recommends \
+            lastlog2 wtmpdb sqlite3 libpam-lastlog2 libpam-wtmpdb || \
+            log_warn "Не удалось установить пакеты для новых логов входа"
+    fi
+}
+
 install_dependencies() {
     log_info "Установка зависимостей для ${SYSTEM_TYPE} ${SYSTEM_VERSION}..."
     
@@ -586,45 +601,64 @@ show_session_info() {
     
     local real_user
     real_user=$(safe_cmd /usr/bin/logname)
-    if [[ "${real_user}" = "N/A" ]]; then
+    if [[ "${real_user}" = "N/A" ]] || [[ -z "${real_user}" ]]; then
         real_user=$(safe_cmd "${WHO}" | "${AWK}" 'NR==1{print $1}')
     fi
     printf "${COLOR_LABEL}%-22s${COLOR_YELLOW}%s${RESET}\n" "User:" "${real_user:-Unknown}"
     
     local lastlog_displayed=false
-    
-    if command -v lastlog2 >/dev/null 2>&1; then
-        local lastlog2_output
-        lastlog2_output=$(safe_cmd lastlog2 show -u "${real_user}" 2>/dev/null | "${TAIL}" -n 1)
-        if [[ "${lastlog2_output}" != "N/A" ]] && [[ "${lastlog2_output}" != *"Never logged in"* ]] && [[ -n "${lastlog2_output}" ]]; then
-            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s${RESET}\n" "Last login:" "${lastlog2_output}"
+    local last_login
+
+    if command -v wtmpdb >/dev/null 2>&1; then
+        last_login=$(safe_cmd wtmpdb find -u "${real_user}" -n 1 2>/dev/null | tail -n 1)
+        if [[ -n "${last_login}" ]] && [[ "${last_login}" != *"Never logged in"* ]]; then
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s${RESET}\n" "Last login:" "${last_login}"
             lastlog_displayed=true
         fi
     fi
-    
+
+    if [[ "${lastlog_displayed}" = false ]] && command -v lastlog2 >/dev/null 2>&1; then
+        last_login=$(safe_cmd lastlog2 -u "${real_user}" --time-format iso 2>/dev/null | tail -n 1)
+        if [[ -n "${last_login}" ]] && [[ "${last_login}" != *"Never logged in"* ]]; then
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s${RESET}\n" "Last login:" "${last_login}"
+            lastlog_displayed=true
+        fi
+    fi
+
     if [[ "${lastlog_displayed}" = false ]] && [[ -f "/var/lib/wtmpdb/wtmp.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
         local wtmp_query
-        wtmp_query=$(safe_cmd sqlite3 /var/lib/wtmpdb/wtmp.db "SELECT strftime('%Y-%m-%d %H:%M:%S', time, 'unixepoch'), host FROM wtmp WHERE user='${real_user}' AND type=7 ORDER BY time DESC LIMIT 1;" 2>/dev/null)
-        if [[ "${wtmp_query}" != "N/A" ]] && [[ -n "${wtmp_query}" ]]; then
+        wtmp_query=$(safe_cmd sqlite3 /var/lib/wtmpdb/wtmp.db \
+            "SELECT strftime('%Y-%m-%d %H:%M:%S', time, 'unixepoch'), host FROM wtmp WHERE user='${real_user}' AND type=7 ORDER BY time DESC LIMIT 1;" 2>/dev/null)
+        if [[ -n "${wtmp_query}" ]]; then
             local wtmp_time wtmp_host
             wtmp_time=$(echo "${wtmp_query}" | "${CUT}" -d'|' -f1)
             wtmp_host=$(echo "${wtmp_query}" | "${CUT}" -d'|' -f2)
-            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" "Last login:" "${wtmp_time}" "${wtmp_host:-unknown}"
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" \
+                "Last login:" "${wtmp_time}" "${wtmp_host:-unknown}"
             lastlog_displayed=true
         fi
     fi
-    
+
     if [[ "${lastlog_displayed}" = false ]] && [[ -f "/var/log/lastlog" ]] && [[ -x "${LASTLOG}" ]]; then
         local lastlog_raw lastlog_date lastlog_ip
-        lastlog_raw=$(safe_cmd "${LASTLOG}" -u "${real_user}" | "${TAIL}" -n 1)
-        if [[ "${lastlog_raw}" != "N/A" ]] && [[ "${lastlog_raw}" != *"Never logged in"* ]]; then
+        lastlog_raw=$(safe_cmd "${LASTLOG}" -u "${real_user}" 2>/dev/null | tail -n 1)
+        if [[ -n "${lastlog_raw}" ]] && [[ "${lastlog_raw}" != *"Never logged in"* ]]; then
             lastlog_date=$(echo "${lastlog_raw}" | "${AWK}" '{printf "%s %s %s %s %s", $4, $5, $6, $7, $9}')
             lastlog_ip=$(echo "${lastlog_raw}" | "${AWK}" '{print $3}')
-            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" "Last login:" "${lastlog_date}" "${lastlog_ip}"
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s ${COLOR_YELLOW}from %s${RESET}\n" \
+                "Last login:" "${lastlog_date}" "${lastlog_ip}"
             lastlog_displayed=true
         fi
     fi
-    
+
+    if [[ "${lastlog_displayed}" = false ]] && command -v last >/dev/null 2>&1; then
+        last_login=$(safe_cmd last -n 1 -F "${real_user}" 2>/dev/null | head -n 1)
+        if [[ -n "${last_login}" ]]; then
+            printf "${COLOR_LABEL}%-22s${COLOR_VALUE}%s${RESET}\n" "Last login:" "${last_login}"
+            lastlog_displayed=true
+        fi
+    fi
+
     if [[ "${lastlog_displayed}" = false ]]; then
         echo -e "${COLOR_LABEL}Last login:${RESET} not available"
     fi
@@ -1323,7 +1357,8 @@ main() {
     validate_system
     
     create_complete_directory_backup
-    
+
+    install_modern_login_tools
     install_dependencies
     create_config
     create_motd_script
