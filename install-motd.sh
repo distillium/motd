@@ -421,10 +421,8 @@ validate_system() {
 }
 
 install_modern_login_tools() {
-    if {
-        [[ "$SYSTEM_TYPE" == "debian" && "${SYSTEM_VERSION%%.*}" -ge 13 ]] ||
-        [[ "$SYSTEM_TYPE" == "ubuntu" && $(( ${SYSTEM_VERSION%%.*} * 100 + ${SYSTEM_VERSION#*.} )) -ge 2404 ]]
-    }; then
+    if [[ ( "$SYSTEM_TYPE" == "debian" && "${SYSTEM_VERSION%%.*}" -ge 13 ) || 
+          ( "$SYSTEM_TYPE" == "ubuntu" && $(( ${SYSTEM_VERSION%%.*} * 100 + ${SYSTEM_VERSION#*.} )) -ge 2404 ) ]]; then
         log_info "Обнаружена новая версия ОС — устанавливаем lastlog2, wtmpdb, sqlite3..."
         if ! "${APT_GET}" update -qq; then
             log_warn "Не удалось обновить список пакетов"
