@@ -34,6 +34,12 @@ readonly LS="/bin/ls"
 readonly DATE="/bin/date"
 readonly TAR="/bin/tar"
 readonly RSYNC="/usr/bin/rsync"
+readonly CUT="/usr/bin/cut"
+readonly CAT="/bin/cat"
+readonly AWK="/usr/bin/awk"
+readonly WC="/usr/bin/wc"
+readonly HEAD="/usr/bin/head"
+readonly TAIL="/usr/bin/tail"
 
 log_info() {
     echo "[+] $*" >&2
