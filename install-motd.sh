@@ -436,13 +436,13 @@ safe_cmd() {
 
 show_logo() {
     if [[ "${SHOW_LOGO}" = "true" ]]; then
-        echo -e "${COLOR_TITLE}Message Of The Day by distillium (v2.3.2)${RESET}"
+        echo -e "${COLOR_TITLE}Message Of The Day by distillium (v2.3.3)${RESET}"
         echo -e "${COLOR_TITLE}-----------------------------------------${RESET}"
     fi
 }
 
 show_session_info() {
-    echo -e "${COLOR_TITLE}• Session Info${RESET}"
+    echo -e "${COLOR_TITLE}• Session Details${RESET}"
 
     local real_user
     real_user=$(safe_cmd /usr/bin/logname)
@@ -475,7 +475,7 @@ show_session_info() {
 }
 
 show_system_info() {
-    echo -e "\n${COLOR_TITLE}• System Info${RESET}"
+    echo -e "\n${COLOR_TITLE}• System Details${RESET}"
     
     local hostname_value
     hostname_value=$(safe_cmd "${HOSTNAME}")
@@ -962,7 +962,7 @@ check_setting() {
 
 show_main_menu() {
     while true; do
-        CHOICE=$("${WHIPTAIL}" --title "MOTD v2.3.2" --menu \
+        CHOICE=$("${WHIPTAIL}" --title "MOTD v2.3.3" --menu \
         "Выберите действие:" 15 60 4 \
         "1" "Настроить отображение MOTD" \
         "2" "Настроить Services Status" \
