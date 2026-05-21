@@ -450,6 +450,7 @@ create_config() {
     
     cat > "${CONFIG_FILE}" << EOF
 MOTDSET_LANG=${INSTALLER_LANG}
+COLOR_THEME=auto
 SHOW_LOGO=true
 SHOW_CPU=true
 SHOW_MEM=true
@@ -501,14 +502,48 @@ else
     SERVICES_STATUS_ENABLED=false
 fi
 
-readonly COLOR_TITLE="\e[1;37m"
-readonly COLOR_LABEL="\e[0;36m"
-readonly COLOR_VALUE="\e[0;37m"
-readonly COLOR_GREEN="\e[0;32m"
-readonly COLOR_RED="\e[0;31m"
-readonly COLOR_YELLOW="\e[0;33m"
-readonly BOLD="\e[1m"
-readonly RESET="\e[0m"
+# Detect terminal background and set color theme
+# Override via config: COLOR_THEME=auto|dark|light
+_detect_theme() {
+    local theme="${COLOR_THEME:-auto}"
+    if [[ "${theme}" == "auto" ]]; then
+        # Try COLORFGBG: "fg;bg" — bg < 8 means dark
+        if [[ -n "${COLORFGBG:-}" ]]; then
+            local bg="${COLORFGBG##*;}"
+            if [[ "${bg}" =~ ^[0-9]+$ ]] && [[ "${bg}" -gt 8 ]]; then
+                theme="light"
+            else
+                theme="dark"
+            fi
+        else
+            theme="dark"
+        fi
+    fi
+    echo "${theme}"
+}
+
+_THEME=$(_detect_theme)
+
+if [[ "${_THEME}" == "light" ]]; then
+    COLOR_TITLE="\e[1;34m"
+    COLOR_LABEL="\e[0;36m"
+    COLOR_VALUE="\e[0;30m"
+    COLOR_GREEN="\e[0;32m"
+    COLOR_RED="\e[0;31m"
+    COLOR_YELLOW="\e[0;33m"
+    BOLD="\e[1m"
+    RESET="\e[0m"
+else
+    COLOR_TITLE="\e[1;37m"
+    COLOR_LABEL="\e[0;36m"
+    COLOR_VALUE="\e[0;37m"
+    COLOR_GREEN="\e[0;32m"
+    COLOR_RED="\e[0;31m"
+    COLOR_YELLOW="\e[0;33m"
+    BOLD="\e[1m"
+    RESET="\e[0m"
+fi
+readonly COLOR_TITLE COLOR_LABEL COLOR_VALUE COLOR_GREEN COLOR_RED COLOR_YELLOW BOLD RESET
 
 readonly TOILET="/usr/bin/toilet"
 readonly LAST="/usr/bin/last"
@@ -593,7 +628,7 @@ format_uptime() {
 
 show_logo() {
     if [[ "${SHOW_LOGO}" = "true" ]]; then
-        echo -e "${COLOR_TITLE}Message Of The Day by distillium (v2.4.0)${RESET}"
+        echo -e "${COLOR_TITLE}Message Of The Day by distillium (v2.5.0)${RESET}"
         echo -e "${COLOR_TITLE}-----------------------------------------${RESET}"
     fi
 }
@@ -1046,7 +1081,7 @@ readonly DIRECTORIES_TO_BACKUP=(
 load_motdset_lang() {
     local lang="\${1:-ru}"
     if [[ "\${lang}" == "en" ]]; then
-        MS_TITLE="MOTD v2.4.0"
+        MS_TITLE="MOTD v2.5.0"
         MS_MENU_PROMPT="Choose action:"
         MS_MENU_CONFIGURE="Configure MOTD display"
         MS_MENU_SERVICES="Configure Services Status"
@@ -1102,8 +1137,15 @@ load_motdset_lang() {
         MS_LANG_RU="Russian / Русский"
         MS_LANG_EN="English / Английский"
         MS_LANG_SAVED="Language changed. Restart motd-set to apply."
+        MS_THEME_TITLE="Color Theme"
+        MS_THEME_PROMPT="Select color theme for MOTD:"
+        MS_THEME_AUTO="Auto (detect from terminal)"
+        MS_THEME_DARK="Dark (for dark backgrounds)"
+        MS_THEME_LIGHT="Light (for light backgrounds)"
+        MS_THEME_SAVED="Theme saved. Run 'motd' to check result."
+        MS_MENU_THEME="Color Theme"
     else
-        MS_TITLE="MOTD v2.4.0"
+        MS_TITLE="MOTD v2.5.0"
         MS_MENU_PROMPT="Выберите действие:"
         MS_MENU_CONFIGURE="Настроить отображение MOTD"
         MS_MENU_SERVICES="Настроить Services Status"
@@ -1159,6 +1201,13 @@ load_motdset_lang() {
         MS_LANG_RU="Russian / Русский"
         MS_LANG_EN="English / Английский"
         MS_LANG_SAVED="Язык изменён. Перезапустите motd-set для применения."
+        MS_THEME_TITLE="Цветовая тема"
+        MS_THEME_PROMPT="Выберите цветовую тему для MOTD:"
+        MS_THEME_AUTO="Авто (определять по терминалу)"
+        MS_THEME_DARK="Тёмная (для тёмного фона)"
+        MS_THEME_LIGHT="Светлая (для светлого фона)"
+        MS_THEME_SAVED="Тема сохранена. Запустите 'motd' для проверки."
+        MS_MENU_THEME="Цветовая тема"
     fi
 }
 
@@ -1273,6 +1322,26 @@ check_setting() {
     fi
 }
 
+change_theme() {
+    local current_theme="\$(grep '^COLOR_THEME=' "\${CONFIG}" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo 'auto')"
+    [[ -z "\${current_theme}" ]] && current_theme="auto"
+
+    local new_theme
+    new_theme=\$("\${WHIPTAIL}" --title "\${MS_THEME_TITLE}" --menu "\${MS_THEME_PROMPT}" 11 55 3 \
+        "auto"  "\${MS_THEME_AUTO}" \
+        "dark"  "\${MS_THEME_DARK}" \
+        "light" "\${MS_THEME_LIGHT}" \
+        3>&1 1>&2 2>&3) || return
+
+    if /bin/grep -q '^COLOR_THEME=' "\${CONFIG}"; then
+        /bin/sed -i "s|^COLOR_THEME=.*|COLOR_THEME=\${new_theme}|" "\${CONFIG}"
+    else
+        echo "COLOR_THEME=\${new_theme}" >> "\${CONFIG}"
+    fi
+
+    "\${WHIPTAIL}" --title "\${MS_THEME_TITLE}" --msgbox "\${MS_THEME_SAVED}" 8 50
+}
+
 change_language() {
     local current_lang="\$(grep '^MOTDSET_LANG=' "\${CONFIG}" 2>/dev/null | cut -d= -f2 | tr -d '\"' || echo 'ru')"
     [[ -z "\${current_lang}" ]] && current_lang="ru"
@@ -1296,13 +1365,14 @@ change_language() {
 show_main_menu() {
     while true; do
         CHOICE=\$("\${WHIPTAIL}" --title "\${MS_TITLE}" --menu \
-        "\${MS_MENU_PROMPT}" 16 60 5 \
+        "\${MS_MENU_PROMPT}" 17 60 6 \
         "1" "\${MS_MENU_CONFIGURE}" \
         "2" "\${MS_MENU_SERVICES}" \
         "3" "\${MS_MENU_UNINSTALL}" \
         "4" "\${MS_MENU_STATUS}" \
-        "5" "Language / Язык" \
-        "6" "\${MS_MENU_EXIT}" \
+        "5" "\${MS_MENU_THEME}" \
+        "6" "Language / Язык" \
+        "7" "\${MS_MENU_EXIT}" \
         3>&1 1>&2 2>&3)
         
         case \$CHOICE in
@@ -1310,8 +1380,9 @@ show_main_menu() {
             2) manage_services_status_menu ;;
             3) confirm_uninstall ;;
             4) show_installation_status ;;
-            5) change_language ;;
-            6) exit 0 ;;
+            5) change_theme ;;
+            6) change_language ;;
+            7) exit 0 ;;
             *) exit 0 ;;
         esac
     done
