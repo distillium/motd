@@ -169,6 +169,44 @@ load_language_strings() {
     fi
 }
 
+select_theme() {
+    echo ""
+    if [[ "${INSTALLER_LANG}" == "en" ]]; then
+        echo "Select color theme / Выберите цветовую тему:"
+        echo "  1) Dark  (for dark terminal backgrounds)"
+        echo "  2) Light (for light terminal backgrounds)"
+        echo "  3) Auto  (may not work on some terminals)"
+        echo ""
+        echo "  Tip: you can change this later in motd-set -> Color Theme"
+        echo ""
+        local choice
+        if [[ -t 0 ]]; then
+            read -r -p "Choice [1-3, default 1]: " choice
+        else
+            read -r -p "Choice [1-3, default 1]: " choice < /dev/tty
+        fi
+    else
+        echo "Выберите цветовую тему / Select color theme:"
+        echo "  1) Тёмная  (для тёмного фона терминала)"
+        echo "  2) Светлая (для светлого фона терминала)"
+        echo "  3) Авто    (автоопределение может не работать в вашем терминале)"
+        echo ""
+        echo "  Совет: тему можно сменить в motd-set -> Цветовая тема"
+        echo ""
+        local choice
+        if [[ -t 0 ]]; then
+            read -r -p "Выбор [1-3, по умолчанию 1]: " choice
+        else
+            read -r -p "Выбор [1-3, по умолчанию 1]: " choice < /dev/tty
+        fi
+    fi
+    case "${choice}" in
+        2) THEME_CHOICE="light" ;;
+        3) THEME_CHOICE="auto"  ;;
+        *) THEME_CHOICE="dark"  ;;
+    esac
+}
+
 log_info() {
     echo "[+] $*" >&2
 }
@@ -375,6 +413,7 @@ trap cleanup_on_error ERR
 
 select_language
 load_language_strings
+select_theme
 
 check_root() {
     if [[ "${EUID}" -ne 0 ]]; then
@@ -450,7 +489,7 @@ create_config() {
     
     cat > "${CONFIG_FILE}" << EOF
 MOTDSET_LANG=${INSTALLER_LANG}
-COLOR_THEME=auto
+COLOR_THEME=${THEME_CHOICE}
 SHOW_LOGO=true
 SHOW_CPU=true
 SHOW_MEM=true
